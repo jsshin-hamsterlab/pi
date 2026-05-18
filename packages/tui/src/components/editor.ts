@@ -1,4 +1,4 @@
-import type { AutocompleteProvider, AutocompleteSuggestions } from "../autocomplete.js";
+import { type AutocompleteProvider, type AutocompleteSuggestions, extractSlashTokenPrefix } from "../autocomplete.js";
 import { getKeybindings } from "../keybindings.js";
 import { decodePrintableKey, matchesKey } from "../keys.js";
 import { KillRing } from "../kill-ring.js";
@@ -630,6 +630,7 @@ export class Editor implements Component, Focusable {
 				if (selected && this.autocompleteProvider) {
 					this.pushUndoSnapshot();
 					this.lastAction = null;
+					const shouldSubmitAfterCompletion = this.shouldSubmitAfterSlashCompletion(this.autocompletePrefix);
 					const result = this.autocompleteProvider.applyCompletion(
 						this.state.lines,
 						this.state.cursorLine,
@@ -641,7 +642,7 @@ export class Editor implements Component, Focusable {
 					this.state.cursorLine = result.cursorLine;
 					this.setCursorCol(result.cursorCol);
 
-					if (this.autocompletePrefix.startsWith("/")) {
+					if (shouldSubmitAfterCompletion) {
 						this.cancelAutocomplete();
 						// Fall through to submit
 					} else {
@@ -1050,9 +1051,14 @@ export class Editor implements Component, Focusable {
 
 		// Check if we should trigger or update autocomplete
 		if (!this.autocompleteState) {
-			// Auto-trigger for "/" at the start of a line (slash commands)
-			if (char === "/" && this.isAtStartOfMessage()) {
-				this.tryTriggerAutocomplete();
+			// Auto-trigger for "/" when starting a slash command at the prompt start
+			// or when creating a mid-line slash skill reference token.
+			if (char === "/") {
+				const currentLine = this.state.lines[this.state.cursorLine] || "";
+				const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
+				if (this.hasSlashAutocompleteContext(textBeforeCursor)) {
+					this.tryTriggerAutocomplete();
+				}
 			}
 			// Auto-trigger for symbol-based completion like @ or # at token boundaries
 			else if (char === "@" || char === "#") {
@@ -1063,12 +1069,12 @@ export class Editor implements Component, Focusable {
 					this.tryTriggerAutocomplete();
 				}
 			}
-			// Also auto-trigger when typing letters in a slash command or symbol completion context
+			// Also auto-trigger when typing letters in a slash command, slash skill
+			// reference, or symbol completion context.
 			else if (/[a-zA-Z0-9.\-_]/.test(char)) {
 				const currentLine = this.state.lines[this.state.cursorLine] || "";
 				const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
-				// Check if we're in a slash command (with or without space for arguments)
-				if (this.isInSlashCommandContext(textBeforeCursor)) {
+				if (this.hasSlashAutocompleteContext(textBeforeCursor)) {
 					this.tryTriggerAutocomplete();
 				}
 				// Check if we're in a symbol-based completion context like @ or #
@@ -1247,8 +1253,7 @@ export class Editor implements Component, Focusable {
 			// If autocomplete was cancelled (no matches), re-trigger if we're in a completable context
 			const currentLine = this.state.lines[this.state.cursorLine] || "";
 			const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
-			// Slash command context
-			if (this.isInSlashCommandContext(textBeforeCursor)) {
+			if (this.hasSlashAutocompleteContext(textBeforeCursor)) {
 				this.tryTriggerAutocomplete();
 			}
 			// Symbol-based completion context like @ or #
@@ -1611,8 +1616,7 @@ export class Editor implements Component, Focusable {
 		} else {
 			const currentLine = this.state.lines[this.state.cursorLine] || "";
 			const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
-			// Slash command context
-			if (this.isInSlashCommandContext(textBeforeCursor)) {
+			if (this.hasSlashAutocompleteContext(textBeforeCursor)) {
 				this.tryTriggerAutocomplete();
 			}
 			// Symbol-based completion context like @ or #
@@ -2035,21 +2039,24 @@ export class Editor implements Component, Focusable {
 		this.setCursorCol(newCol);
 	}
 
-	// Slash menu only allowed on the first line of the editor
-	private isSlashMenuAllowed(): boolean {
-		return this.state.cursorLine === 0;
+	private isPromptStartSlashCommandContext(textBeforeCursor: string): boolean {
+		return this.state.cursorLine === 0 && textBeforeCursor.trimStart().startsWith("/");
 	}
 
-	// Helper method to check if cursor is at start of message (for slash command detection)
-	private isAtStartOfMessage(): boolean {
-		if (!this.isSlashMenuAllowed()) return false;
+	private hasSlashAutocompleteContext(textBeforeCursor: string): boolean {
+		return (
+			this.isPromptStartSlashCommandContext(textBeforeCursor) || extractSlashTokenPrefix(textBeforeCursor) !== null
+		);
+	}
+
+	private shouldSubmitAfterSlashCompletion(prefix: string): boolean {
+		if (!prefix.startsWith("/") || this.state.cursorLine !== 0) {
+			return false;
+		}
+
 		const currentLine = this.state.lines[this.state.cursorLine] || "";
-		const beforeCursor = currentLine.slice(0, this.state.cursorCol);
-		return beforeCursor.trim() === "" || beforeCursor.trim() === "/";
-	}
-
-	private isInSlashCommandContext(textBeforeCursor: string): boolean {
-		return this.isSlashMenuAllowed() && textBeforeCursor.trimStart().startsWith("/");
+		const beforePrefix = currentLine.slice(0, this.state.cursorCol - prefix.length);
+		return beforePrefix.trim() === "";
 	}
 
 	// Autocomplete methods
@@ -2099,8 +2106,15 @@ export class Editor implements Component, Focusable {
 
 		const currentLine = this.state.lines[this.state.cursorLine] || "";
 		const beforeCursor = currentLine.slice(0, this.state.cursorCol);
+		const isPromptStartSlashCommand = this.isPromptStartSlashCommandContext(beforeCursor);
 
-		if (this.isInSlashCommandContext(beforeCursor) && !beforeCursor.trimStart().includes(" ")) {
+		if (isPromptStartSlashCommand) {
+			if (!beforeCursor.trimStart().includes(" ")) {
+				this.handleSlashCommandCompletion();
+			} else {
+				this.forceFileAutocomplete(true);
+			}
+		} else if (extractSlashTokenPrefix(beforeCursor)) {
 			this.handleSlashCommandCompletion();
 		} else {
 			this.forceFileAutocomplete(true);

@@ -190,6 +190,53 @@ describe("AgentSession prompt characterization", () => {
 		expect(expandedPrompt).toContain("explain this");
 	});
 
+	it("expands inline skill references before sending the prompt", async () => {
+		const tempDir = join(tmpdir(), `pi-inline-skill-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+		tempDirs.push(tempDir);
+		const skillPath = join(tempDir, "test-skill.md");
+		writeFileSync(skillPath, "# Test Skill\n\nUse the inline skill body.");
+
+		const resourceLoader = {
+			...createTestResourceLoader(),
+			getSkills: () => ({
+				skills: [
+					{
+						name: "test",
+						description: "Test skill",
+						filePath: skillPath,
+						disableModelInvocation: false,
+						baseDir: tempDir,
+						sourceInfo: createSyntheticSourceInfo(skillPath, {
+							source: "local",
+							scope: "project",
+							origin: "top-level",
+							baseDir: tempDir,
+						}),
+					},
+				],
+				diagnostics: [],
+			}),
+		};
+		const harness = await createHarness({ resourceLoader });
+		harnesses.push(harness);
+		let expandedPrompt = "";
+
+		harness.setResponses([
+			(context) => {
+				const user = context.messages.find((message) => message.role === "user");
+				expandedPrompt = user ? getMessageText(user) : "";
+				return fauxAssistantMessage("ok");
+			},
+		]);
+
+		await harness.session.prompt("Please use /skill:test explain this file");
+
+		expect(expandedPrompt).toContain('Please use <skill name="test" location="');
+		expect(expandedPrompt).toContain("Use the inline skill body.");
+		expect(expandedPrompt).toContain("</skill> explain this file");
+	});
+
 	it("expands prompt templates before sending the prompt", async () => {
 		const template: PromptTemplate = {
 			name: "review",

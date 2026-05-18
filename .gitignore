@@ -39,3 +39,11 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+/pi
+/theme/
+/assets/
+/export-html/
+/docs/
+/examples/
+/CHANGELOG.md
+/photon_rs_bg.wasm

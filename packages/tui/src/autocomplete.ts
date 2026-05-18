@@ -104,6 +104,21 @@ function parsePathPrefix(prefix: string): { rawPrefix: string; isAtPrefix: boole
 	return { rawPrefix: prefix, isAtPrefix: false, isQuotedPrefix: false };
 }
 
+export function extractSlashTokenPrefix(text: string): string | null {
+	const quotedPrefix = extractQuotedPrefix(text);
+	if (quotedPrefix) {
+		return null;
+	}
+
+	const lastDelimiterIndex = findLastDelimiter(text);
+	const tokenStart = lastDelimiterIndex === -1 ? 0 : lastDelimiterIndex + 1;
+	if (text[tokenStart] !== "/") {
+		return null;
+	}
+
+	return text.slice(tokenStart);
+}
+
 function buildCompletionValue(
 	path: string,
 	options: { isDirectory: boolean; isAtPrefix: boolean; isQuotedPrefix: boolean },
@@ -302,23 +317,23 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			};
 		}
 
-		if (!options.force && textBeforeCursor.startsWith("/")) {
+		const commandItems = this.commands.map((cmd) => {
+			const name = "name" in cmd ? cmd.name : cmd.value;
+			const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
+			const desc = cmd.description ?? "";
+			const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
+			return {
+				name,
+				label: name,
+				description: fullDesc || undefined,
+			};
+		});
+
+		if (!options.force && cursorLine === 0 && textBeforeCursor.startsWith("/")) {
 			const spaceIndex = textBeforeCursor.indexOf(" ");
 
 			if (spaceIndex === -1) {
 				const prefix = textBeforeCursor.slice(1);
-				const commandItems = this.commands.map((cmd) => {
-					const name = "name" in cmd ? cmd.name : cmd.value;
-					const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
-					const desc = cmd.description ?? "";
-					const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
-					return {
-						name,
-						label: name,
-						description: fullDesc || undefined,
-					};
-				});
-
 				const filtered = fuzzyFilter(commandItems, prefix, (item) => item.name).map((item) => ({
 					value: item.name,
 					label: item.label,
@@ -355,6 +370,28 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			};
 		}
 
+		if (!options.force) {
+			const slashTokenPrefix = extractSlashTokenPrefix(textBeforeCursor);
+			if (slashTokenPrefix && (slashTokenPrefix !== textBeforeCursor || cursorLine > 0)) {
+				const filtered = fuzzyFilter(
+					commandItems.filter((item) => item.name.startsWith("skill:")),
+					slashTokenPrefix.slice(1),
+					(item) => item.name,
+				).map((item) => ({
+					value: item.name,
+					label: item.label,
+					...(item.description && { description: item.description }),
+				}));
+
+				if (filtered.length > 0) {
+					return {
+						items: filtered,
+						prefix: slashTokenPrefix,
+					};
+				}
+			}
+		}
+
 		const pathMatch = this.extractPathPrefix(textBeforeCursor, options.force ?? false);
 		if (pathMatch === null) {
 			return null;
@@ -385,19 +422,27 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const adjustedAfterCursor =
 			isQuotedPrefix && hasTrailingQuoteInItem && hasLeadingQuoteAfterCursor ? afterCursor.slice(1) : afterCursor;
 
-		// Check if we're completing a slash command (prefix starts with "/" but NOT a file path)
-		// Slash commands are at the start of the line and don't contain path separators after the first /
-		const isSlashCommand = prefix.startsWith("/") && beforePrefix.trim() === "" && !prefix.slice(1).includes("/");
+		const hasTrailingWhitespace = adjustedAfterCursor.startsWith(" ") || adjustedAfterCursor.startsWith("\t");
+
+		// Check if we're completing a slash command token. Mid-line skill completions
+		// still use a /prefix, but command items do not include the leading slash.
+		const isSlashCommand =
+			prefix.startsWith("/") &&
+			!item.value.startsWith("/") &&
+			!item.value.startsWith("./") &&
+			!item.value.startsWith("../") &&
+			!item.value.startsWith("~/") &&
+			!item.value.startsWith('"');
 		if (isSlashCommand) {
-			// This is a command name completion
-			const newLine = `${beforePrefix}/${item.value} ${adjustedAfterCursor}`;
+			const suffix = hasTrailingWhitespace ? "" : " ";
+			const newLine = `${beforePrefix}/${item.value}${suffix}${adjustedAfterCursor}`;
 			const newLines = [...lines];
 			newLines[cursorLine] = newLine;
 
 			return {
 				lines: newLines,
 				cursorLine,
-				cursorCol: beforePrefix.length + item.value.length + 2, // +2 for "/" and space
+				cursorCol: beforePrefix.length + item.value.length + 1 + suffix.length,
 			};
 		}
 
@@ -773,8 +818,9 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const currentLine = lines[cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
 
-		// Don't trigger if we're typing a slash command at the start of the line
-		if (textBeforeCursor.trim().startsWith("/") && !textBeforeCursor.trim().includes(" ")) {
+		// Don't trigger file completion when the first line is currently typing a
+		// built-in slash command name at the start of the prompt.
+		if (cursorLine === 0 && textBeforeCursor.trim().startsWith("/") && !textBeforeCursor.trim().includes(" ")) {
 			return false;
 		}
 
