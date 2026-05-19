@@ -1153,25 +1153,6 @@ export class AgentSession {
 		}
 	}
 
-	/**
-	 * Expand skill commands (/skill:name args) to their full content.
-	 * Returns the expanded text, or the original text if not a skill command or skill not found.
-	 * Emits errors via extension runner if file read fails.
-	 */
-	private _expandSkillCommand(text: string): string {
-		if (!text.startsWith("/skill:")) return text;
-
-		const spaceIndex = text.indexOf(" ");
-		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
-		if (!skill) return text;
-
-		const skillBlock = this._renderSkillBlock(skill);
-		if (!skillBlock) return text;
-		return args ? `${skillBlock}\n\n${args}` : skillBlock;
-	}
-
 	private _expandInlineSkillReferences(text: string): string {
 		return text.replace(/(^|[\s"'=])\/skill:([a-z0-9-]+)\b/g, (match, prefix: string, skillName: string) => {
 			const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
@@ -1184,10 +1165,29 @@ export class AgentSession {
 	}
 
 	private _expandSkillReferences(text: string): string {
-		if (text.startsWith("/skill:")) {
-			return this._expandSkillCommand(text);
+		if (!text.startsWith("/skill:")) {
+			return this._expandInlineSkillReferences(text);
 		}
-		return this._expandInlineSkillReferences(text);
+
+		const spaceIndex = text.indexOf(" ");
+		const skillName = spaceIndex === -1 ? text.slice(7) : text.slice(7, spaceIndex);
+		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
+		if (!skill) {
+			return this._expandInlineSkillReferences(text);
+		}
+
+		const skillBlock = this._renderSkillBlock(skill);
+		if (!skillBlock) {
+			return this._expandInlineSkillReferences(text);
+		}
+
+		if (!args) {
+			return skillBlock;
+		}
+
+		const expandedArgs = this._expandInlineSkillReferences(args);
+		return `${skillBlock}\n\n${expandedArgs}`;
 	}
 
 	private _renderSkillBlock(skill: Skill): string | null {

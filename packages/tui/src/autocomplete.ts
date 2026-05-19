@@ -119,6 +119,15 @@ export function extractSlashTokenPrefix(text: string): string | null {
 	return text.slice(tokenStart);
 }
 
+function extractInlineSlashTokenPrefix(text: string, cursorLine: number): string | null {
+	const slashTokenPrefix = extractSlashTokenPrefix(text);
+	if (!slashTokenPrefix) {
+		return null;
+	}
+
+	return cursorLine > 0 || slashTokenPrefix !== text ? slashTokenPrefix : null;
+}
+
 function buildCompletionValue(
 	path: string,
 	options: { isDirectory: boolean; isAtPrefix: boolean; isQuotedPrefix: boolean },
@@ -329,6 +338,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			};
 		});
 
+		const inlineSlashTokenPrefix = options.force ? null : extractInlineSlashTokenPrefix(textBeforeCursor, cursorLine);
+
 		if (!options.force && cursorLine === 0 && textBeforeCursor.startsWith("/")) {
 			const spaceIndex = textBeforeCursor.indexOf(" ");
 
@@ -355,27 +366,21 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				const name = "name" in cmd ? cmd.name : cmd.value;
 				return name === commandName;
 			});
-			if (!command || !("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
+			if (command && "getArgumentCompletions" in command && command.getArgumentCompletions) {
+				const argumentSuggestions = await command.getArgumentCompletions(argumentText);
+				if (Array.isArray(argumentSuggestions) && argumentSuggestions.length > 0) {
+					return {
+						items: argumentSuggestions,
+						prefix: argumentText,
+					};
+				}
 				return null;
 			}
 
-			const argumentSuggestions = await command.getArgumentCompletions(argumentText);
-			if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
-				return null;
-			}
-
-			return {
-				items: argumentSuggestions,
-				prefix: argumentText,
-			};
-		}
-
-		if (!options.force) {
-			const slashTokenPrefix = extractSlashTokenPrefix(textBeforeCursor);
-			if (slashTokenPrefix && (slashTokenPrefix !== textBeforeCursor || cursorLine > 0)) {
+			if (inlineSlashTokenPrefix && commandName.startsWith("skill:")) {
 				const filtered = fuzzyFilter(
 					commandItems.filter((item) => item.name.startsWith("skill:")),
-					slashTokenPrefix.slice(1),
+					inlineSlashTokenPrefix.slice(1),
 					(item) => item.name,
 				).map((item) => ({
 					value: item.name,
@@ -386,9 +391,30 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				if (filtered.length > 0) {
 					return {
 						items: filtered,
-						prefix: slashTokenPrefix,
+						prefix: inlineSlashTokenPrefix,
 					};
 				}
+			}
+
+			return null;
+		}
+
+		if (inlineSlashTokenPrefix) {
+			const filtered = fuzzyFilter(
+				commandItems.filter((item) => item.name.startsWith("skill:")),
+				inlineSlashTokenPrefix.slice(1),
+				(item) => item.name,
+			).map((item) => ({
+				value: item.name,
+				label: item.label,
+				...(item.description && { description: item.description }),
+			}));
+
+			if (filtered.length > 0) {
+				return {
+					items: filtered,
+					prefix: inlineSlashTokenPrefix,
+				};
 			}
 		}
 

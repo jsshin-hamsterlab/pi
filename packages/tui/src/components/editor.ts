@@ -2043,9 +2043,23 @@ export class Editor implements Component, Focusable {
 		return this.state.cursorLine === 0 && textBeforeCursor.trimStart().startsWith("/");
 	}
 
+	private extractInlineSlashTokenPrefix(textBeforeCursor: string): string | null {
+		const slashTokenPrefix = extractSlashTokenPrefix(textBeforeCursor);
+		if (!slashTokenPrefix) {
+			return null;
+		}
+
+		if (this.state.cursorLine > 0) {
+			return slashTokenPrefix;
+		}
+
+		return slashTokenPrefix === textBeforeCursor.trimStart() ? null : slashTokenPrefix;
+	}
+
 	private hasSlashAutocompleteContext(textBeforeCursor: string): boolean {
 		return (
-			this.isPromptStartSlashCommandContext(textBeforeCursor) || extractSlashTokenPrefix(textBeforeCursor) !== null
+			this.isPromptStartSlashCommandContext(textBeforeCursor) ||
+			this.extractInlineSlashTokenPrefix(textBeforeCursor) !== null
 		);
 	}
 
@@ -2106,16 +2120,18 @@ export class Editor implements Component, Focusable {
 
 		const currentLine = this.state.lines[this.state.cursorLine] || "";
 		const beforeCursor = currentLine.slice(0, this.state.cursorCol);
+		const inlineSlashTokenPrefix = this.extractInlineSlashTokenPrefix(beforeCursor);
 		const isPromptStartSlashCommand = this.isPromptStartSlashCommandContext(beforeCursor);
+		const isPromptStartSkillCommand = this.state.cursorLine === 0 && beforeCursor.trimStart().startsWith("/skill:");
 
-		if (isPromptStartSlashCommand) {
+		if (inlineSlashTokenPrefix && (!isPromptStartSlashCommand || isPromptStartSkillCommand)) {
+			this.handleSlashCommandCompletion();
+		} else if (isPromptStartSlashCommand) {
 			if (!beforeCursor.trimStart().includes(" ")) {
 				this.handleSlashCommandCompletion();
 			} else {
 				this.forceFileAutocomplete(true);
 			}
-		} else if (extractSlashTokenPrefix(beforeCursor)) {
-			this.handleSlashCommandCompletion();
 		} else {
 			this.forceFileAutocomplete(true);
 		}

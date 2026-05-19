@@ -405,6 +405,20 @@ describe("expandPromptTemplate", () => {
 
 		expect(result).toBe("arg1: label-2");
 	});
+
+	test("should leave inline slash template text unchanged", () => {
+		const result = expandPromptTemplate("Use /arg-test label-2 for this", [
+			{
+				name: "arg-test",
+				description: "test",
+				content: "arg1: $1",
+				sourceInfo: { path: "/tmp/arg-test.md", source: "local", scope: "temporary", origin: "top-level" },
+				filePath: "/tmp/arg-test.md",
+			},
+		]);
+
+		expect(result).toBe("Use /arg-test label-2 for this");
+	});
 });
 
 // ============================================================================

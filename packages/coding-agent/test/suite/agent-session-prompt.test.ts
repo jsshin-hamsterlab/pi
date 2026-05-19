@@ -237,6 +237,83 @@ describe("AgentSession prompt characterization", () => {
 		expect(expandedPrompt).toContain("</skill> explain this file");
 	});
 
+	it("expands repeated /skill references and keeps inline prompt templates literal", async () => {
+		const tempDir = join(tmpdir(), `pi-repeat-skill-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+		tempDirs.push(tempDir);
+		const firstSkillPath = join(tempDir, "first-skill.md");
+		const secondSkillPath = join(tempDir, "second-skill.md");
+		writeFileSync(firstSkillPath, "# First Skill\n\nUse the first skill body.");
+		writeFileSync(secondSkillPath, "# Second Skill\n\nUse the second skill body.");
+
+		const template: PromptTemplate = {
+			name: "review",
+			description: "Review template",
+			content: "Review this code: $1",
+			filePath: "/virtual/review.md",
+			sourceInfo: createSyntheticSourceInfo("/virtual/review.md", {
+				source: "local",
+				scope: "temporary",
+				origin: "top-level",
+			}),
+		};
+		const resourceLoader = {
+			...createTestResourceLoader(),
+			getSkills: () => ({
+				skills: [
+					{
+						name: "first",
+						description: "First skill",
+						filePath: firstSkillPath,
+						disableModelInvocation: false,
+						baseDir: tempDir,
+						sourceInfo: createSyntheticSourceInfo(firstSkillPath, {
+							source: "local",
+							scope: "project",
+							origin: "top-level",
+							baseDir: tempDir,
+						}),
+					},
+					{
+						name: "second",
+						description: "Second skill",
+						filePath: secondSkillPath,
+						disableModelInvocation: false,
+						baseDir: tempDir,
+						sourceInfo: createSyntheticSourceInfo(secondSkillPath, {
+							source: "local",
+							scope: "project",
+							origin: "top-level",
+							baseDir: tempDir,
+						}),
+					},
+				],
+				diagnostics: [],
+			}),
+			getPrompts: () => ({ prompts: [template], diagnostics: [] }),
+		};
+		const harness = await createHarness({ resourceLoader });
+		harnesses.push(harness);
+		let expandedPrompt = "";
+
+		harness.setResponses([
+			(context) => {
+				const user = context.messages.find((message) => message.role === "user");
+				expandedPrompt = user ? getMessageText(user) : "";
+				return fauxAssistantMessage("ok");
+			},
+		]);
+
+		await harness.session.prompt("/skill:first compare /review src/index.ts with /skill:second");
+
+		expect(expandedPrompt).toContain('<skill name="first" location="');
+		expect(expandedPrompt).toContain("Use the first skill body.");
+		expect(expandedPrompt).toContain('<skill name="second" location="');
+		expect(expandedPrompt).toContain("Use the second skill body.");
+		expect(expandedPrompt).toContain("/review src/index.ts");
+		expect(expandedPrompt).not.toContain("Review this code:");
+	});
+
 	it("expands prompt templates before sending the prompt", async () => {
 		const template: PromptTemplate = {
 			name: "review",

@@ -85,6 +85,11 @@ copy_runtime_file() {
 cp "$BUILT_BINARY" "$OUTPUT_BINARY"
 chmod +x "$OUTPUT_BINARY"
 
+if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+	echo "Re-signing standalone binary for macOS..."
+	codesign --force --sign - "$OUTPUT_BINARY"
+fi
+
 copy_runtime_dir "theme"
 copy_runtime_dir "assets"
 copy_runtime_dir "export-html"
